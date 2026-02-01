@@ -44,6 +44,7 @@ class VideoStreamer:
         self.cap = cv2.VideoCapture(src, cv2.CAP_DSHOW)
         self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, STREAM_WIDTH)
         self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, STREAM_HEIGHT)
+        # Request 60 FPS from hardware if possible
         self.cap.set(cv2.CAP_PROP_FPS, 60)
         self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
         
@@ -59,19 +60,24 @@ class VideoStreamer:
         while self.running:
             ret, frame = self.cap.read()
             if ret:
+                # Resize
                 frame = cv2.resize(frame, (STREAM_WIDTH, STREAM_HEIGHT))
+                # Encode once here to save processing time in the HTTP thread
                 success, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, JPEG_QUALITY])
                 if success:
                     with self.lock:
                         self.jpeg_frame = buffer.tobytes()
+                    # Signal that a new frame is ready
                     self.frame_event.set()
             else:
+                # If read fails, sleep briefly to prevent CPU spin
                 time.sleep(0.01)
 
     def get_frame(self):
+        # Wait for a new frame to be available (Timeout prevents hanging if cam dies)
         if self.frame_event.wait(timeout=1.0):
             with self.lock:
-                self.frame_event.clear()
+                self.frame_event.clear() # Reset event
                 return self.jpeg_frame
         return None
 
@@ -96,9 +102,10 @@ class AudioStreamer:
                 print(f"Audio error: {e}")
                 time.sleep(0.1)
 
+# Initialize Flask
 app = Flask(__name__)
 # threading mode is used here. 
-# For production/even higher performance, 'eventlet' + gunicorn.
+# For production/even higher performance, consider 'eventlet' + gunicorn.
 socketio = SocketIO(app, 
                     async_mode='threading', 
                     cors_allowed_origins='*',
@@ -110,6 +117,8 @@ sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 
 def generate_frames():
     while True:
+        # This now blocks until the camera actually has a new frame
+        # removing the need for manual sleep() and syncing perfectly with hardware.
         frame = streamer.get_frame()
         if frame:
             yield (b'--frame\r\n'

@@ -1,0 +1,4 @@
+Flask
+Flask-SocketIO
+opencv-python
+PyAudio
